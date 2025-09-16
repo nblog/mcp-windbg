@@ -8,6 +8,7 @@ keywords = ["windbg", "cdb", "mcp", "llm", "crash-analysis"]
 license = { text = "MIT" }
 dependencies = [
     "semantic-kernel[mcp]",
+    "pydantic[dotenv]>=2.0.0",
 ]
 
 [project.scripts]

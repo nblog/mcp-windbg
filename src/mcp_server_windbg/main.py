@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from semantic_kernel import Kernel
 
-from .windbg_plugin import WinDbgPlugin
+from .windbg_plugin import WinDbgPlugin, WinDbgPluginConfig
 
 # 配置日志
 logging.basicConfig(
@@ -28,12 +28,12 @@ def validate_environment():
     return True
 
 
-def create_kernel() -> Kernel:
+def create_kernel(config: WinDbgPluginConfig | None = None) -> Kernel:
     """创建Semantic Kernel"""
     kernel = Kernel()
     
     # 添加WinDBG插件
-    kernel.add_plugin(WinDbgPlugin(), plugin_name="windbg")
+    kernel.add_plugin(WinDbgPlugin(config), plugin_name="windbg")
     
     logger.info("Kernel初始化完成，已加载WinDBG调试功能模块")
     return kernel
@@ -109,16 +109,14 @@ def run(
             logger.error("环境验证失败")
             return
         
-        # 创建Kernel
-        kernel = create_kernel()
+        windbg_config = WinDbgPluginConfig(timeout=timeout)
+        if cdb_path is not None:
+            windbg_config.cdb_path = cdb_path
+        if symbols_path is not None:
+            windbg_config.symbols_path = symbols_path
         
-        # 设置插件配置
-        windbg_plugin = kernel.plugins["windbg"]
-        if cdb_path:
-            windbg_plugin.set_cdb_path(cdb_path)
-        if symbols_path:
-            windbg_plugin.set_symbols_path(symbols_path)
-        windbg_plugin.set_timeout(timeout)
+        # 创建Kernel
+        kernel = create_kernel(windbg_config)
         
         # 创建MCP服务器
         server = kernel.as_mcp_server(

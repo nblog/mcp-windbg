@@ -12,6 +12,8 @@ import logging
 from typing import List, Optional, Dict, Any
 from dataclasses import asdict
 from semantic_kernel.functions import kernel_function
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 from .cdb_session import (
     CDBSession, CDBError, SessionManager, SessionInfo, 
@@ -21,15 +23,35 @@ from .cdb_session import (
 logger = logging.getLogger(__name__)
 
 
+class WinDbgPluginConfig(BaseSettings):
+    """WinDBG插件配置类，支持从环境变量读取配置"""
+    
+    cdb_path: Optional[str] = Field(None, env="CDB_PATH", description="CDB.exe的路径")
+    symbols_path: Optional[str] = Field(None, env="SYMBOLS_PATH", description="符号文件路径")
+    timeout: int = Field(600, env="DEFAULT_TIMEOUT", description="命令执行超时时间（秒）")
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+
+
 class WinDbgPlugin:
     """Windows调试工具MCP插件"""
     
-    def __init__(self):
+    def __init__(self, config: Optional[WinDbgPluginConfig] = None):
         self.logger = logger
         self.session_manager = session_manager
-        self.cdb_path: Optional[str] = None
-        self.symbols_path: Optional[str] = None
-        self.timeout: int = 30
+        
+        # 如果提供了配置，使用配置中的值，否则使用默认值
+        if config:
+            self.cdb_path = config.cdb_path
+            self.symbols_path = config.symbols_path
+            self.timeout = config.timeout
+        else:
+            self.cdb_path = None
+            self.symbols_path = None
+            self.timeout = 30
         
     def set_cdb_path(self, path: str):
         """设置自定义CDB路径"""
