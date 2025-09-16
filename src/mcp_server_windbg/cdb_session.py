@@ -11,9 +11,11 @@ import subprocess
 import threading
 import re
 import os
+import sys
 import platform
 import time
 import logging
+import locale
 from typing import List, Optional, Dict, Any
 from enum import Enum
 from dataclasses import dataclass
@@ -35,6 +37,46 @@ DEFAULT_CDB_PATHS = [
     r"C:\Program Files\Debugging Tools for Windows (x64)\cdb.exe",
     r"C:\Program Files\Debugging Tools for Windows (x86)\cdb.exe",
 ]
+
+
+def _get_system_encoding():
+    """
+    智能检测系统编码
+    
+    Returns:
+        str: 检测到的编码名称
+    """
+    try:
+        # 优先尝试获取控制台编码
+        if platform.system() == "Windows":
+            # Windows控制台编码
+            import codecs
+            try:
+                # 获取活动代码页
+                import ctypes
+                cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+                encoding = f"cp{cp}"
+                # 验证编码是否有效
+                codecs.lookup(encoding)
+                logger.info(f"检测到Windows控制台编码: {encoding}")
+                return encoding
+            except (AttributeError, LookupError, ImportError):
+                pass
+            
+            # 备选方案：使用locale获取编码
+            try:
+                encoding = locale.getpreferredencoding()
+                if encoding:
+                    logger.info(f"检测到系统首选编码: {encoding}")
+                    return encoding
+            except Exception:
+                pass
+            
+            return 'utf-8'
+        
+    except Exception as e:
+        logger.warning(f"编码检测失败，使用默认编码: {e}")
+        return 'utf-8' if platform.system() != "Windows" else 'gbk'
 
 
 class SessionState(Enum):
@@ -207,12 +249,16 @@ class CDBSession:
             
         try:
             logger.info(f"启动CDB进程: {' '.join(cmd_args)}")
+            # 使用errors='replace'来处理编码错误
+            encoding = _get_system_encoding()
             self.process = subprocess.Popen(
                 cmd_args,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding=encoding,
+                errors='replace',
                 bufsize=1
             )
             
@@ -232,23 +278,30 @@ class CDBSession:
         buffer = []
         try:
             for line in self.process.stdout:
-                line = line.rstrip()
-                if self.verbose:
-                    logger.debug(f"CDB输出: {line}")
-                    
-                with self.lock:
-                    buffer.append(line)
-                    # 检查是否包含命令完成标记
-                    if COMMAND_MARKER_PATTERN.search(line):
-                        # 移除标记行本身
-                        if buffer and COMMAND_MARKER_PATTERN.search(buffer[-1]):
-                            buffer.pop()
-                        self.output_lines = buffer
-                        buffer = []
-                        self.ready_event.set()
+                try:
+                    line = line.rstrip()
+                    if self.verbose:
+                        logger.debug(f"CDB输出: {line}")
+                        
+                    with self.lock:
+                        buffer.append(line)
+                        # 检查是否包含命令完成标记
+                        if COMMAND_MARKER_PATTERN.search(line):
+                            # 移除标记行本身
+                            if buffer and COMMAND_MARKER_PATTERN.search(buffer[-1]):
+                                buffer.pop()
+                            self.output_lines = buffer
+                            buffer = []
+                            self.ready_event.set()
+                except (UnicodeDecodeError, UnicodeError) as e:
+                    # 如果遇到编码错误，记录警告但继续处理
+                    logger.warning(f"CDB输出编码错误，跳过该行: {e}")
+                    continue
                         
         except (IOError, ValueError) as e:
             logger.error(f"CDB输出读取错误: {e}")
+        except Exception as e:
+            logger.error(f"CDB输出读取意外错误: {e}")
     
     def _wait_for_initialization(self):
         """等待CDB初始化完成"""
