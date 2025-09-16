@@ -8,6 +8,7 @@ import logging
 from typing import Any, Literal
 
 from semantic_kernel import Kernel
+from pydantic_settings import BaseSettings
 
 from .windbg_plugin import WinDbgPlugin, WinDbgPluginConfig
 
@@ -28,7 +29,7 @@ def validate_environment():
     return True
 
 
-def create_kernel(config: WinDbgPluginConfig | None = None) -> Kernel:
+def create_kernel(config: BaseSettings | None = None) -> Kernel:
     """创建Semantic Kernel"""
     kernel = Kernel()
     
