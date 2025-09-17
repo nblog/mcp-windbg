@@ -129,7 +129,6 @@ DEFAULT_TIMEOUT=60
 ```
 src/mcp_server_windbg/
 ├── __init__.py          # Package initialization
-├── __main__.py          # Main startup module
 ├── main.py              # Server main program
 ├── windbg_plugin.py     # WinDBG plugin implementation
 └── cdb_session.py       # CDB session management

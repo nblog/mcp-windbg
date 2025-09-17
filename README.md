@@ -129,7 +129,6 @@ DEFAULT_TIMEOUT=60
 ```
 src/mcp_server_windbg/
 ├── __init__.py          # 包初始化
-├── __main__.py          # 主启动模块
 ├── main.py              # 服务器主程序
 ├── windbg_plugin.py     # WinDBG插件实现
 └── cdb_session.py       # CDB会话管理
