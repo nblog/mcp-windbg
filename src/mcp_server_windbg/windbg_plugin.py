@@ -11,6 +11,7 @@ import winreg
 import logging
 from typing import List, Optional, Dict, Any
 from dataclasses import asdict
+from enum import Enum
 from semantic_kernel.functions import kernel_function
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -21,6 +22,35 @@ from .cdb_session import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_session_info(session_info: SessionInfo) -> Dict[str, Any]:
+    """
+    将SessionInfo对象序列化为可JSON序列化的字典
+    
+    Args:
+        session_info: SessionInfo对象
+        
+    Returns:
+        Dict[str, Any]: 可JSON序列化的字典
+    """
+    data = asdict(session_info)
+    # 将枚举类型转换为字符串值
+    if isinstance(data.get('connection_type'), ConnectionType):
+        data['connection_type'] = data['connection_type'].value
+    elif 'connection_type' in data:
+        # 如果已经是字符串，保持不变；如果是其他类型，转换为字符串
+        if not isinstance(data['connection_type'], str):
+            data['connection_type'] = str(data['connection_type'])
+    
+    if isinstance(data.get('state'), SessionState):
+        data['state'] = data['state'].value
+    elif 'state' in data:
+        # 如果已经是字符串，保持不变；如果是其他类型，转换为字符串
+        if not isinstance(data['state'], str):
+            data['state'] = str(data['state'])
+    
+    return data
 
 
 class WinDbgPluginConfig(BaseSettings):
@@ -148,7 +178,7 @@ class WinDbgPlugin:
                     "message": "请提供崩溃转储文件路径进行分析",
                     "available_dumps": available_dumps,
                     "local_dumps_path": local_dumps_path
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             
             self.logger.info(f"开始分析崩溃转储: {dump_path}")
             
@@ -189,9 +219,9 @@ class WinDbgPlugin:
                 "success": True,
                 "dump_path": dump_path,
                 "session_id": session.session_id,
-                "session_info": asdict(session_info),
+                "session_info": _serialize_session_info(session_info),
                 "results": results
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
             
         except CDBError as e:
             self.logger.error(f"CDB错误: {e}")
@@ -199,13 +229,13 @@ class WinDbgPlugin:
                 "success": False,
                 "error": f"CDB错误: {str(e)}",
                 "session_id": getattr(e, 'session_id', None)
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"分析崩溃转储失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"分析失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
     
     @kernel_function(description="Connect to a remote debugging session using CDB/WinDBG")
     def open_windbg_remote(
@@ -267,9 +297,9 @@ class WinDbgPlugin:
                 "success": True,
                 "connection_string": connection_string,
                 "session_id": session.session_id,
-                "session_info": asdict(session_info),
+                "session_info": _serialize_session_info(session_info),
                 "results": results
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
             
         except CDBError as e:
             self.logger.error(f"CDB错误: {e}")
@@ -277,13 +307,13 @@ class WinDbgPlugin:
                 "success": False,
                 "error": f"CDB错误: {str(e)}",
                 "session_id": getattr(e, 'session_id', None)
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"连接远程调试会话失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"连接失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
     
     @kernel_function(description="Execute a specific WinDBG/CDB command on a loaded crash dump or remote session")
     def run_windbg_cmd(
@@ -310,13 +340,13 @@ class WinDbgPlugin:
                 return json.dumps({
                     "success": False,
                     "error": "必须提供dump_path或connection_string中的一个"
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             
             if dump_path and connection_string:
                 return json.dumps({
                     "success": False,
                     "error": "dump_path和connection_string是互斥的"
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             
             self.logger.info(f"执行命令: {command}")
             
@@ -337,9 +367,9 @@ class WinDbgPlugin:
                 "success": True,
                 "command": command,
                 "session_id": session.session_id,
-                "session_info": asdict(session_info),
+                "session_info": _serialize_session_info(session_info),
                 "output": output
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
             
         except CDBError as e:
             self.logger.error(f"CDB错误: {e}")
@@ -348,14 +378,14 @@ class WinDbgPlugin:
                 "error": f"CDB错误: {str(e)}",
                 "command": command,
                 "session_id": getattr(e, 'session_id', None)
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"执行命令失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"执行失败: {str(e)}",
                 "command": command
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
     
     @kernel_function(description="Close and unload a crash dump session to free up resources")
     def close_windbg_dump(self, dump_path: str) -> str:
@@ -378,20 +408,20 @@ class WinDbgPlugin:
                     "success": True,
                     "message": f"成功关闭崩溃转储会话: {dump_path}",
                     "session_id": session_id
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             else:
                 return json.dumps({
                     "success": False,
                     "message": f"未找到活跃的崩溃转储会话: {dump_path}",
                     "session_id": session_id
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
                 
         except Exception as e:
             self.logger.error(f"关闭崩溃转储会话失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"关闭失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
     
     @kernel_function(description="Close a remote debugging connection and free up resources")
     def close_windbg_remote(self, connection_string: str) -> str:
@@ -414,20 +444,20 @@ class WinDbgPlugin:
                     "success": True,
                     "message": f"成功关闭远程连接: {connection_string}",
                     "session_id": session_id
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             else:
                 return json.dumps({
                     "success": False,
                     "message": f"未找到活跃的远程连接: {connection_string}",
                     "session_id": session_id
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
                 
         except Exception as e:
             self.logger.error(f"关闭远程连接失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"关闭失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
     
     @kernel_function(description="List Windows crash dump files in a specified directory")
     def list_windbg_dumps(
@@ -452,13 +482,13 @@ class WinDbgPlugin:
                     return json.dumps({
                         "success": False,
                         "error": "未指定目录路径且在注册表中未找到默认转储路径"
-                    }, ensure_ascii=False, indent=2)
+                    }, ensure_ascii=False)
             
             if not os.path.exists(directory_path) or not os.path.isdir(directory_path):
                 return json.dumps({
                     "success": False,
                     "error": f"目录未找到: {directory_path}"
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             
             self.logger.info(f"搜索转储文件: {directory_path} (递归: {recursive})")
             
@@ -479,7 +509,7 @@ class WinDbgPlugin:
                     "message": f"在{directory_path}中未找到崩溃转储文件(*.*dmp)",
                     "directory_path": directory_path,
                     "dump_files": []
-                }, ensure_ascii=False, indent=2)
+                }, ensure_ascii=False)
             
             # 格式化结果
             dump_info = []
@@ -508,14 +538,14 @@ class WinDbgPlugin:
                 "recursive": recursive,
                 "count": len(dump_files),
                 "dump_files": dump_info
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
             
         except Exception as e:
             self.logger.error(f"列出转储文件失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"列出失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
     
     @kernel_function(description="List all active CDB debugging sessions and their status")
     def list_windbg_sessions(self) -> str:
@@ -534,7 +564,7 @@ class WinDbgPlugin:
             
             sessions_data = []
             for session_info in sessions_info:
-                sessions_data.append(asdict(session_info))
+                sessions_data.append(_serialize_session_info(session_info))
             
             self.logger.info(f"列出{len(sessions_data)}个活跃会话")
             
@@ -542,11 +572,11 @@ class WinDbgPlugin:
                 "success": True,
                 "count": len(sessions_data),
                 "sessions": sessions_data
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
             
         except Exception as e:
             self.logger.error(f"列出会话失败: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"列出失败: {str(e)}"
-            }, ensure_ascii=False, indent=2)
+            }, ensure_ascii=False)
