@@ -119,7 +119,8 @@ Close remote debugging connections
 You can create a `.env` file to set default configurations:
 ```env
 CDB_PATH=C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe
-SYMBOLS_PATH=srv*c:\\symbols*https://msdl.microsoft.com/download/symbols
+SYMBOL_PATH=srv*C:\\Symbols*https://msdl.microsoft.com/download/symbols
+SOURCE_PATH=C:\Users\qt\work\qt;
 DEFAULT_TIMEOUT=60
 ```
 

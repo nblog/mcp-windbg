@@ -106,6 +106,7 @@ class SessionInfo:
     commands_executed: int
     cdb_path: str
     symbols_path: Optional[str] = None
+    source_path: Optional[str] = None
 
 
 class CDBError(Exception):
@@ -125,6 +126,7 @@ class CDBSession:
         remote_connection: Optional[str] = None,
         cdb_path: Optional[str] = None,
         symbols_path: Optional[str] = None,
+        source_path: Optional[str] = None,
         initial_commands: Optional[List[str]] = None,
         timeout: int = 30,
         additional_args: Optional[List[str]] = None
@@ -136,7 +138,8 @@ class CDBSession:
             dump_path: 崩溃转储文件路径（与remote_connection互斥）
             remote_connection: 远程调试连接字符串
             cdb_path: 自定义CDB.exe路径
-            symbols_path: 自定义符号路径  
+            symbols_path: 自定义符号路径
+            source_path: 自定义源代码路径
             initial_commands: CDB启动时运行的初始命令
             timeout: 命令超时时间（秒）
             additional_args: 传递给CDB.exe的额外参数
@@ -170,6 +173,7 @@ class CDBSession:
             raise CDBError("找不到cdb.exe。请提供有效路径。", self.session_id)
         
         self.symbols_path = symbols_path
+        self.source_path = source_path
         
         # 会话状态
         self.state = SessionState.INITIALIZING
@@ -224,6 +228,7 @@ class CDBSession:
     
     def _start_cdb_process(self, additional_args: Optional[List[str]] = None):
         """启动CDB进程"""
+        # https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
         cmd_args = [self.cdb_path]
         
         # 添加连接类型特定参数
@@ -234,10 +239,15 @@ class CDBSession:
             cmd_args.extend(["-remote", self.remote_connection])
             logger.info(f"连接到远程目标: {self.remote_connection}")
         
-        # 添加符号路径
+        # 添加符号路径 https://learn.microsoft.com/windows-hardware/drivers/debugger/symbol-path
         if self.symbols_path:
             cmd_args.extend(["-y", self.symbols_path])
             logger.info(f"使用符号路径: {self.symbols_path}")
+        
+        # 添加源代码路径 https://learn.microsoft.com/windows-hardware/drivers/debugger/source-path
+        if self.source_path:
+            cmd_args.extend(["-srcpath", self.source_path])
+            logger.info(f"使用源代码路径: {self.source_path}")
         
         # 添加额外参数
         if additional_args:
@@ -379,7 +389,8 @@ class CDBSession:
             last_activity=self.last_activity,
             commands_executed=self.commands_executed,
             cdb_path=self.cdb_path,
-            symbols_path=self.symbols_path
+            symbols_path=self.symbols_path,
+            source_path=self.source_path
         )
     
     def is_alive(self) -> bool:

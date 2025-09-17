@@ -74,6 +74,11 @@ def parse_arguments():
         help="自定义符号路径",
     )
     parser.add_argument(
+        "--source-path",
+        type=str,
+        help="自定义源代码路径",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=600,
@@ -87,6 +92,7 @@ def run(
     port: int | None = None,
     cdb_path: str | None = None,
     symbols_path: str | None = None,
+    source_path: str | None = None,
     timeout: int = 600
 ) -> None:
     """
@@ -97,6 +103,7 @@ def run(
         port: SSE 服务器端口（仅在 transport="sse" 时使用）
         cdb_path: 自定义CDB.exe路径
         symbols_path: 自定义符号路径
+        source_path: 自定义源代码路径
         timeout: 命令超时时间
     """
     try:
@@ -115,6 +122,8 @@ def run(
             windbg_config.cdb_path = cdb_path
         if symbols_path is not None:
             windbg_config.symbols_path = symbols_path
+        if source_path is not None:
+            windbg_config.source_path = source_path
         
         # 创建Kernel
         kernel = create_kernel(windbg_config)
@@ -198,6 +207,7 @@ def main():
         port=args.port,
         cdb_path=args.cdb_path,
         symbols_path=args.symbols_path,
+        source_path=args.source_path,
         timeout=args.timeout
     )
 

@@ -57,7 +57,8 @@ class WinDbgPluginConfig(BaseSettings):
     """WinDBG插件配置类，支持从环境变量读取配置"""
     
     cdb_path: Optional[str] = Field(None, env="CDB_PATH", description="CDB.exe的路径")
-    symbols_path: Optional[str] = Field(None, env="SYMBOLS_PATH", description="符号文件路径")
+    symbols_path: Optional[str] = Field(None, env="SYMBOL_PATH", description="符号文件路径")
+    source_path: Optional[str] = Field(None, env="SOURCE_PATH", description="源代码路径")
     timeout: int = Field(600, env="DEFAULT_TIMEOUT", description="命令执行超时时间（秒）")
     
     class Config:
@@ -72,27 +73,33 @@ class WinDbgPlugin:
     def __init__(self, config: Optional[WinDbgPluginConfig] = None):
         self.logger = logger
         self.session_manager = session_manager
+        self.cdb_path = None
+        self.symbols_path = None
+        self.source_path = None
+        self.timeout = 30
         
         # 如果提供了配置，使用配置中的值，否则使用默认值
         if config:
             self.cdb_path = config.cdb_path
             self.symbols_path = config.symbols_path
+            self.source_path = config.source_path
             self.timeout = config.timeout
-        else:
-            self.cdb_path = None
-            self.symbols_path = None
-            self.timeout = 30
-        
+    
     def set_cdb_path(self, path: str):
         """设置自定义CDB路径"""
         self.cdb_path = path
         self.logger.info(f"设置CDB路径: {path}")
-        
+    
     def set_symbols_path(self, path: str):
         """设置自定义符号路径"""
         self.symbols_path = path
         self.logger.info(f"设置符号路径: {path}")
-        
+    
+    def set_source_path(self, path: str):
+        """设置自定义源代码路径"""
+        self.source_path = path
+        self.logger.info(f"设置源代码路径: {path}")
+
     def set_timeout(self, timeout: int):
         """设置命令超时时间"""
         self.timeout = timeout
@@ -130,6 +137,7 @@ class WinDbgPlugin:
             remote_connection=remote_connection,
             cdb_path=self.cdb_path,
             symbols_path=self.symbols_path,
+            source_path=self.source_path,
             timeout=self.timeout
         )
     
