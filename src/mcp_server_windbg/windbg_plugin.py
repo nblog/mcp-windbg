@@ -100,8 +100,7 @@ class WinDbgPlugin:
             remote_connection=remote_connection,
             cdb_path=self.cdb_path,
             symbols_path=self.symbols_path,
-            timeout=self.timeout,
-            verbose=True
+            timeout=self.timeout
         )
     
     @kernel_function(description="Analyze a Windows crash dump file using CDB/WinDBG and return comprehensive analysis results")

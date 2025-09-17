@@ -127,7 +127,6 @@ class CDBSession:
         symbols_path: Optional[str] = None,
         initial_commands: Optional[List[str]] = None,
         timeout: int = 30,
-        verbose: bool = False,
         additional_args: Optional[List[str]] = None
     ):
         """
@@ -140,7 +139,6 @@ class CDBSession:
             symbols_path: 自定义符号路径  
             initial_commands: CDB启动时运行的初始命令
             timeout: 命令超时时间（秒）
-            verbose: 是否启用详细输出
             additional_args: 传递给CDB.exe的额外参数
         """
         # 验证参数
@@ -155,7 +153,6 @@ class CDBSession:
         self.dump_path = dump_path
         self.remote_connection = remote_connection
         self.timeout = timeout
-        self.verbose = verbose
         
         # 确定连接类型和会话ID
         if self.dump_path:
@@ -241,12 +238,12 @@ class CDBSession:
         if self.symbols_path:
             cmd_args.extend(["-y", self.symbols_path])
             logger.info(f"使用符号路径: {self.symbols_path}")
-            
+        
         # 添加额外参数
         if additional_args:
             cmd_args.extend(additional_args)
             logger.info(f"添加额外参数: {additional_args}")
-            
+        
         try:
             logger.info(f"启动CDB进程: {' '.join(cmd_args)}")
             # 使用errors='replace'来处理编码错误
@@ -274,15 +271,14 @@ class CDBSession:
         """线程函数：持续读取CDB输出"""
         if not self.process or not self.process.stdout:
             return
-            
+        
         buffer = []
         try:
             for line in self.process.stdout:
                 try:
                     line = line.rstrip()
-                    if self.verbose:
-                        logger.debug(f"CDB输出: {line}")
-                        
+                    logger.debug(f"CDB输出: {line}")
+                    
                     with self.lock:
                         buffer.append(line)
                         # 检查是否包含命令完成标记
@@ -308,7 +304,7 @@ class CDBSession:
         logger.info("等待CDB初始化...")
         try:
             self.ready_event.clear()
-            self.process.stdin.write(f"{COMMAND_MARKER}\\n")
+            self.process.stdin.write(f"{COMMAND_MARKER}\n")
             self.process.stdin.flush()
             
             if not self.ready_event.wait(timeout=self.timeout):
@@ -348,7 +344,7 @@ class CDBSession:
             
         try:
             # 发送命令和完成标记
-            self.process.stdin.write(f"{command}\\n{COMMAND_MARKER}\\n")
+            self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
             self.process.stdin.flush()
         except IOError as e:
             self.state = SessionState.ERROR
@@ -414,12 +410,12 @@ class CDBSession:
                     if self.remote_connection:
                         # 远程连接发送CTRL+B分离
                         logger.debug("发送分离命令到远程会话")
-                        self.process.stdin.write("\\x02")  # CTRL+B
+                        self.process.stdin.write("\x02")  # CTRL+B
                         self.process.stdin.flush()
                     else:
                         # 转储文件发送'q'退出
                         logger.debug("发送退出命令")
-                        self.process.stdin.write("q\\n")
+                        self.process.stdin.write("q\n")
                         self.process.stdin.flush()
                     self.process.wait(timeout=3)
                 except Exception as e:

@@ -12,7 +12,7 @@
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },
-            "args": [ "--transport", "sse" ]
+            "args": [ "--transport", "sse", "--log-level", "DEBUG" ]
         }
     ]
 }

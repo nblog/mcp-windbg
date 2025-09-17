@@ -141,7 +141,6 @@ Available options:
 - `--cdb-path CDB_PATH`: Custom path to cdb.exe
 - `--symbols-path SYMBOLS_PATH`: Custom symbols path
 - `--timeout TIMEOUT`: Command timeout in seconds (default: 30)
-- `--verbose`: Enable verbose output
 
 
 2. Customize the configuration as needed:
