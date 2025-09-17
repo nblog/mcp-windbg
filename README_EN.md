@@ -157,7 +157,7 @@ src/mcp_server_windbg/
 ### Common Issues
 
 **Q: CDB.exe not found**
-A: Ensure Windows SDK or debugging tools are installed, or specify the path using `--cdb-path`
+A: Ensure [Windows Driver Kit](https://learn.microsoft.com/windows-hardware/drivers/download-the-wdk) or debugging tools are installed, or specify the path using `--cdb-path`
 
 **Q: Symbol loading failed**
 A: Set the correct symbols path using `--symbols-path` or environment variables

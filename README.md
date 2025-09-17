@@ -157,7 +157,7 @@ src/mcp_server_windbg/
 ### 常见问题
 
 **Q: 找不到CDB.exe**
-A: 确保已安装Windows SDK或调试工具，或使用`--cdb-path`指定路径
+A: 确保已安装 [Windows Driver Kit](https://learn.microsoft.com/windows-hardware/drivers/download-the-wdk)，或使用`--cdb-path`指定路径
 
 **Q: 符号加载失败**
 A: 设置正确的符号路径使用`--symbols-path`或环境变量
