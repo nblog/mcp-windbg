@@ -26,11 +26,16 @@
 
 ```json
 {
-    "mcpServers": {
-        "mcp-server-windbg": {
-
-        }
+  "mcpServers": {
+    "mcp-server-windbg": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "mcp-server-windbg@git+https://github.com/nblog/mcp-windbg.git",
+        "mcp-server-windbg"
+      ]
     }
+  }
 }
 ```
 
