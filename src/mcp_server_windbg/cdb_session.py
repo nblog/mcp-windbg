@@ -128,7 +128,7 @@ class CDBSession:
         symbols_path: Optional[str] = None,
         source_path: Optional[str] = None,
         initial_commands: Optional[List[str]] = None,
-        timeout: int = 30,
+        timeout: int = 600,
         additional_args: Optional[List[str]] = None
     ):
         """

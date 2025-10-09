@@ -76,7 +76,7 @@ class WinDbgPlugin:
         self.cdb_path = None
         self.symbols_path = None
         self.source_path = None
-        self.timeout = 30
+        self.timeout = 600
         
         # 如果提供了配置，使用配置中的值，否则使用默认值
         if config:
