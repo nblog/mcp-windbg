@@ -11,6 +11,7 @@ from semantic_kernel import Kernel
 from pydantic_settings import BaseSettings
 
 from .windbg_plugin import WinDbgPlugin, WinDbgPluginConfig
+from .prompts import get_all_prompts
 
 # 配置日志
 logging.basicConfig(
@@ -136,7 +137,8 @@ def run(
                 "Windows调试工具MCP服务器。提供CDB/WinDBG调试会话管理、"
                 "崩溃转储分析、远程调试连接和调试命令执行功能。"
                 "支持自动分析崩溃转储并提供详细的调试信息。"
-            )
+            ),
+            prompts=get_all_prompts()  # 添加内置提示词
         )
         
         # 启动服务器
