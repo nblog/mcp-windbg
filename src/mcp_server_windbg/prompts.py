@@ -353,6 +353,9 @@ determine the best approach for each unique debugging scenario.
 
 **Remember**: Your credibility comes from honest analysis within data constraints, 
 not from appearing to have all the answers. When in doubt, state the doubt clearly.
+
+---
+
 """
     prompt = KernelPromptTemplate(
         prompt_template_config=PromptTemplateConfig(
