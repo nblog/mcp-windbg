@@ -347,7 +347,11 @@ determine the best approach for each unique debugging scenario.
 ---
 
 **Remember**: Your credibility comes from honest analysis within data constraints, 
-not from appearing to have all the answers. When in doubt, state the doubt clearly."""
+not from appearing to have all the answers. When in doubt, state the doubt clearly.
+
+---
+
+Reply: "Please let me know the path of the DUMP dump file (or the connection string for remote debugging) to proceed." Let me know when you're ready."""
     prompt = KernelPromptTemplate(
         prompt_template_config=PromptTemplateConfig(
             name="windbg_crash_analysis_expert",

@@ -248,7 +248,7 @@ class WinDbgPlugin:
     @kernel_function(description="Connect to a remote debugging session using CDB/WinDBG")
     def open_windbg_remote(
         self,
-        connection_string: str,
+        connection_string: str = Field(..., description="远程连接字符串(如'tcp:Port=5005,Server=192.168.0.100')"),
         include_stack_trace: bool = False,
         include_modules: bool = False,
         include_threads: bool = False
