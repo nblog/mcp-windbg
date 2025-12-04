@@ -105,7 +105,7 @@ class SessionInfo:
     last_activity: float
     commands_executed: int
     cdb_path: str
-    symbols_path: Optional[str] = None
+    symbol_path: Optional[str] = None
     source_path: Optional[str] = None
 
 
@@ -125,7 +125,7 @@ class CDBSession:
         dump_path: Optional[str] = None,
         remote_connection: Optional[str] = None,
         cdb_path: Optional[str] = None,
-        symbols_path: Optional[str] = None,
+        symbol_path: Optional[str] = None,
         source_path: Optional[str] = None,
         initial_commands: Optional[List[str]] = None,
         timeout: int = 600,
@@ -138,7 +138,7 @@ class CDBSession:
             dump_path: 崩溃转储文件路径（与remote_connection互斥）
             remote_connection: 远程调试连接字符串
             cdb_path: 自定义CDB.exe路径
-            symbols_path: 自定义符号路径
+            symbol_path: 自定义符号路径
             source_path: 自定义源代码路径
             initial_commands: CDB启动时运行的初始命令
             timeout: 命令超时时间（秒）
@@ -172,7 +172,7 @@ class CDBSession:
         if not self.cdb_path:
             raise CDBError("找不到cdb.exe。请提供有效路径。", self.session_id)
         
-        self.symbols_path = symbols_path
+        self.symbol_path = symbol_path
         self.source_path = source_path
         
         # 会话状态
@@ -240,9 +240,9 @@ class CDBSession:
             logger.info(f"连接到远程目标: {self.remote_connection}")
         
         # 添加符号路径 https://learn.microsoft.com/windows-hardware/drivers/debugger/symbol-path
-        if self.symbols_path:
-            cmd_args.extend(["-y", self.symbols_path])
-            logger.info(f"使用符号路径: {self.symbols_path}")
+        if self.symbol_path:
+            cmd_args.extend(["-y", self.symbol_path])
+            logger.info(f"使用符号路径: {self.symbol_path}")
         
         # 添加源代码路径 https://learn.microsoft.com/windows-hardware/drivers/debugger/source-path
         if self.source_path:
@@ -389,7 +389,7 @@ class CDBSession:
             last_activity=self.last_activity,
             commands_executed=self.commands_executed,
             cdb_path=self.cdb_path,
-            symbols_path=self.symbols_path,
+            symbol_path=self.symbol_path,
             source_path=self.source_path
         )
     

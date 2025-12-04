@@ -70,7 +70,7 @@ def test_windbg_plugin():
     # 测试配置方法
     plugin.set_timeout(60)
     plugin.set_cdb_path("test_path")
-    plugin.set_symbols_path("test_symbols")
+    plugin.set_symbol_path("test_symbols")
     print("✅ 插件配置方法测试通过")
     
     # 测试列出会话（应为空）

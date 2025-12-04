@@ -92,7 +92,7 @@ def run(
     transport: Literal["sse", "stdio"] = "stdio", 
     port: int | None = None,
     cdb_path: str | None = None,
-    symbols_path: str | None = None,
+    symbol_path: str | None = None,
     source_path: str | None = None,
     timeout: int = 600
 ) -> None:
@@ -103,7 +103,7 @@ def run(
         transport: 传输协议，支持 "sse" 或 "stdio"
         port: SSE 服务器端口（仅在 transport="sse" 时使用）
         cdb_path: 自定义CDB.exe路径
-        symbols_path: 自定义符号路径
+        symbol_path: 自定义符号路径
         source_path: 自定义源代码路径
         timeout: 命令超时时间
     """
@@ -121,8 +121,8 @@ def run(
         windbg_config = WinDbgPluginConfig(timeout=timeout)
         if cdb_path is not None:
             windbg_config.cdb_path = cdb_path
-        if symbols_path is not None:
-            windbg_config.symbols_path = symbols_path
+        if symbol_path is not None:
+            windbg_config.symbol_path = symbol_path
         if source_path is not None:
             windbg_config.source_path = source_path
         
@@ -208,7 +208,7 @@ def main():
         transport=args.transport, 
         port=args.port,
         cdb_path=args.cdb_path,
-        symbols_path=args.symbols_path,
+        symbol_path=args.symbol_path,
         source_path=args.source_path,
         timeout=args.timeout
     )
