@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 keywords = ["windbg", "cdb", "mcp", "llm", "crash-analysis"]
 license = { text = "MIT" }
 dependencies = [
-    "semantic-kernel[mcp]",
+    "semantic-kernel[mcp]>=1.30.0",
     "pydantic[dotenv]>=2.0.0",
 ]
 
@@ -17,9 +17,3 @@ mcp-server-windbg = "mcp_server_windbg:main"
 [build-system]
 requires = ["uv_build>=0.8.15,<0.9.0"]
 build-backend = "uv_build"
-
-[tool.pytest.ini_options]
-testpaths = ["src/mcp_server_windbg/tests"]
-
-[project.optional-dependencies]
-test = ["pytest>=7.0.0"]
