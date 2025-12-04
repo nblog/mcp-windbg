@@ -351,7 +351,7 @@ not from appearing to have all the answers. When in doubt, state the doubt clear
 
 ---
 
-Reply: "Please let me know the path of the DUMP dump file (or the connection string for remote debugging) to proceed." Let me know when you're ready."""
+Without preamble, reply: "Please let me know the path of the DUMP dump file (or the connection string for remote debugging) to proceed." Let me know when you're ready."""
     prompt = KernelPromptTemplate(
         prompt_template_config=PromptTemplateConfig(
             name="windbg_crash_analysis_expert",
