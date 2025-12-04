@@ -112,14 +112,14 @@ Close remote debugging connections
 - `--port`: SSE mode port (default: 3001)
 - `--log-level`: Log level (DEBUG, INFO, WARNING, ERROR)
 - `--cdb-path`: Custom CDB.exe path
-- `--symbols-path`: Custom symbols path
+- `--symbol-path`: Custom symbols path
 - `--timeout`: Command timeout in seconds (default: 600)
 
 ### Environment Variables
 You can create a `.env` file to set default configurations:
 ```env
 CDB_PATH=C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe
-SYMBOL_PATH=srv*C:\\Symbols*https://msdl.microsoft.com/download/symbols
+SYMBOL_PATH=srv*C:\\ProgramData\\Dbg\\sym*https://msdl.microsoft.com/download/symbols
 SOURCE_PATH=C:\Users\qt\work\qt;
 DEFAULT_TIMEOUT=60
 ```
@@ -159,9 +159,6 @@ src/mcp_server_windbg/
 
 **Q: CDB.exe not found**
 A: Ensure [Windows Driver Kit](https://learn.microsoft.com/windows-hardware/drivers/download-the-wdk) or debugging tools are installed, or specify the path using `--cdb-path`
-
-**Q: Symbol loading failed**
-A: Set the correct symbols path using `--symbols-path` or environment variables
 
 **Q: Command execution timeout**
 A: Increase timeout using the `--timeout` parameter, or check if CDB is responding

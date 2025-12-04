@@ -112,14 +112,14 @@
 - `--port`: SSE模式端口（默认：3001）
 - `--log-level`: 日志级别（DEBUG, INFO, WARNING, ERROR）
 - `--cdb-path`: 自定义CDB.exe路径
-- `--symbols-path`: 自定义符号路径
+- `--symbol-path`: 自定义符号路径
 - `--timeout`: 命令超时时间（秒，默认：600）
 
 ### 环境变量
 可以创建`.env`文件来设置默认配置：
 ```env
 CDB_PATH=C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe
-SYMBOL_PATH=srv*C:\\Symbols*https://msdl.microsoft.com/download/symbols
+SYMBOL_PATH=srv*C:\\ProgramData\\Dbg\\sym*https://msdl.microsoft.com/download/symbols
 SOURCE_PATH=C:\Users\qt\work\qt;
 DEFAULT_TIMEOUT=60
 ```
@@ -159,9 +159,6 @@ src/mcp_server_windbg/
 
 **Q: 找不到CDB.exe**
 A: 确保已安装 [Windows Driver Kit](https://learn.microsoft.com/windows-hardware/drivers/download-the-wdk)，或使用`--cdb-path`指定路径
-
-**Q: 符号加载失败**
-A: 设置正确的符号路径使用`--symbols-path`或环境变量
 
 **Q: 命令执行超时**
 A: 增加超时时间使用`--timeout`参数，或检查CDB是否响应

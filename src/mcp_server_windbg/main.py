@@ -70,7 +70,7 @@ def parse_arguments():
         help="自定义CDB.exe路径",
     )
     parser.add_argument(
-        "--symbols-path",
+        "--symbol-path",
         type=str,
         help="自定义符号路径",
     )
