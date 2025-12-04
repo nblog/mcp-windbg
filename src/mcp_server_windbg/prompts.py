@@ -354,16 +354,10 @@ not from appearing to have all the answers. When in doubt, state the doubt clear
 Without preamble, reply: "Please let me know the path of the DUMP dump file (or the connection string for remote debugging) to proceed." Let me know when you're ready."""
     prompt = KernelPromptTemplate(
         prompt_template_config=PromptTemplateConfig(
-            name="windbg_crash_analysis_expert",
+            name="windbg_crash_analysis_guide",
             description=(
                 "🔍 START HERE: Essential WinDbg crash analysis guide and methodology. "
                 "This prompt provides systematic debugging best practices for Windows crash dump analysis. "
-                "AI assistants should READ THIS FIRST before using any WinDbg tools to understand: "
-                "(1) How to assess dump data quality and completeness, "
-                "(2) Systematic step-by-step analysis methodology, "
-                "(3) Common crash patterns and investigation techniques, "
-                "(4) Proper interpretation of debugging output. "
-                "Reading this guidance ensures effective use of the available MCP debugging tools and accurate crash diagnosis."
             ),
             template=template,
             input_variables=[],  # 无需输入变量，这是纯指导性文档
