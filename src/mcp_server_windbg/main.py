@@ -130,8 +130,9 @@ def run(
         kernel = create_kernel(windbg_config)
         
         # 创建MCP服务器
+        from mcp_server_windbg import __version__ as version
         server = kernel.as_mcp_server(
-            version="0.1.0",
+            version=version,
             server_name="mcp-server-windbg",
             instructions=(
                 "Windows调试工具MCP服务器。提供CDB/WinDBG调试会话管理、"
