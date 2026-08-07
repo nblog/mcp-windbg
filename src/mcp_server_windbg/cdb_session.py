@@ -5,26 +5,26 @@
 - 会话状态管理
 - 命令执行超时控制
 - 错误处理和重试机制
+
+CDB命令行选项参考文档：
+https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
 """
 
+import shutil
 import subprocess
 import threading
 import re
 import os
-import sys
 import platform
 import time
 import logging
 import locale
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from enum import Enum
 from dataclasses import dataclass
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
-
-# 正则表达式检测CDB提示符
-PROMPT_REGEX = re.compile(r"^\d+:\d+>\s*$")
 
 # 命令标记用于可靠地检测命令完成
 COMMAND_MARKER = ".echo COMMAND_COMPLETED_MARKER"
@@ -33,50 +33,48 @@ COMMAND_MARKER_PATTERN = re.compile(r"COMMAND_COMPLETED_MARKER")
 # 默认的CDB.exe可能位置
 DEFAULT_CDB_PATHS = [
     r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
-    r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe", 
+    r"C:\Program Files (x86)\Windows Kits\10\Debuggers\arm64\cdb.exe",
+    r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe",
+    r"C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe",
     r"C:\Program Files\Debugging Tools for Windows (x64)\cdb.exe",
     r"C:\Program Files\Debugging Tools for Windows (x86)\cdb.exe",
 ]
 
 
-def _get_system_encoding():
+def _get_system_encoding() -> str:
     """
-    智能检测系统编码
+    智能检测CDB子进程输出所使用的编码
     
     Returns:
-        str: 检测到的编码名称
+        str: 检测到的编码名称，检测失败时回退到utf-8
     """
+    if platform.system() != "Windows":
+        return "utf-8"
+    
+    import codecs
+    
     try:
-        # 优先尝试获取控制台编码
-        if platform.system() == "Windows":
-            # Windows控制台编码
-            import codecs
-            try:
-                # 获取活动代码页
-                import ctypes
-                cp = ctypes.windll.kernel32.GetConsoleOutputCP()
-                encoding = f"cp{cp}"
-                # 验证编码是否有效
-                codecs.lookup(encoding)
-                logger.info(f"检测到Windows控制台编码: {encoding}")
-                return encoding
-            except (AttributeError, LookupError, ImportError):
-                pass
-            
-            # 备选方案：使用locale获取编码
-            try:
-                encoding = locale.getpreferredencoding()
-                if encoding:
-                    logger.info(f"检测到系统首选编码: {encoding}")
-                    return encoding
-            except Exception:
-                pass
-            
-            return 'utf-8'
-        
-    except Exception as e:
-        logger.warning(f"编码检测失败，使用默认编码: {e}")
-        return 'utf-8' if platform.system() != "Windows" else 'gbk'
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()
+        if cp:
+            encoding = f"cp{cp}"
+            codecs.lookup(encoding)
+            logger.info(f"检测到Windows控制台编码: {encoding}")
+            return encoding
+    except (AttributeError, LookupError, OSError, ValueError):
+        pass
+    
+    try:
+        encoding = locale.getpreferredencoding(False)
+        if encoding:
+            codecs.lookup(encoding)
+            logger.info(f"检测到系统首选编码: {encoding}")
+            return encoding
+    except (LookupError, ValueError):
+        pass
+    
+    logger.warning("编码检测失败，回退到utf-8")
+    return "utf-8"
 
 
 class SessionState(Enum):
@@ -222,22 +220,38 @@ class CDBSession:
                 if os.path.isfile(path):
                     logger.info(f"找到CDB: {path}")
                     return path
+            
+            resolved = shutil.which("cdb")
+            if resolved:
+                logger.info(f"从PATH找到CDB: {resolved}")
+                return resolved
         
         logger.error("未找到CDB可执行文件")
         return None
     
     def _start_cdb_process(self, additional_args: Optional[List[str]] = None):
-        """启动CDB进程"""
-        # https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
+        """
+        启动CDB进程
+        
+        命令行选项参考：
+        https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
+        
+        使用的选项：
+        - ``-z DumpFile``: 加载崩溃转储文件
+        - ``-remote ClientTransport``: 连接到已运行的调试服务器，必须位于首位
+        - ``-y SymbolPath``: 符号搜索路径
+        - ``-srcpath SourcePath``: 源文件搜索路径
+        - ``-noshell``: 禁用 ``.shell`` 命令，阻止通过调试器执行宿主机命令
+        """
         cmd_args = [self.cdb_path]
         
-        # 添加连接类型特定参数
-        if self.dump_path:
-            cmd_args.extend(["-z", self.dump_path])
-            logger.info(f"加载转储文件: {self.dump_path}")
-        elif self.remote_connection:
+        # -remote必须是命令行上的第一个参数
+        if self.remote_connection:
             cmd_args.extend(["-remote", self.remote_connection])
             logger.info(f"连接到远程目标: {self.remote_connection}")
+        
+        # 禁用.shell，避免通过调试命令逃逸到宿主机shell
+        cmd_args.append("-noshell")
         
         # 添加符号路径 https://learn.microsoft.com/windows-hardware/drivers/debugger/symbol-path
         if self.symbol_path:
@@ -253,6 +267,11 @@ class CDBSession:
         if additional_args:
             cmd_args.extend(additional_args)
             logger.info(f"添加额外参数: {additional_args}")
+        
+        # -z必须在选项之后，作为目标说明符
+        if self.dump_path:
+            cmd_args.extend(["-z", self.dump_path])
+            logger.info(f"加载转储文件: {self.dump_path}")
         
         try:
             logger.info(f"启动CDB进程: {' '.join(cmd_args)}")
@@ -318,7 +337,7 @@ class CDBSession:
             self.process.stdin.flush()
             
             if not self.ready_event.wait(timeout=self.timeout):
-                raise CDBError(f"CDB初始化超时", self.session_id)
+                raise CDBError("CDB初始化超时", self.session_id)
                 
             logger.info("CDB初始化完成")
         except IOError as e:

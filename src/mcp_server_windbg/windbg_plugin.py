@@ -2,6 +2,9 @@
 
 提供Windows调试工具的MCP服务接口，基于Semantic Kernel框架实现。
 包含崩溃转储分析、远程调试和调试命令执行功能。
+
+CDB命令行选项参考文档：
+https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
 """
 
 import json
@@ -9,12 +12,11 @@ import os
 import glob
 import winreg
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Annotated, Optional, Dict, Any
 from dataclasses import asdict
-from enum import Enum
 from semantic_kernel.functions import kernel_function
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .cdb_session import (
     CDBSession, CDBError, SessionManager, SessionInfo, 
@@ -53,18 +55,54 @@ def _serialize_session_info(session_info: SessionInfo) -> Dict[str, Any]:
     return data
 
 
+#: CDB默认符号路径，指向Microsoft公共符号服务器
+#: https://learn.microsoft.com/windows-hardware/drivers/debugger/microsoft-public-symbols
+DEFAULT_SYMBOL_PATH = "SRV*https://msdl.microsoft.com/download/symbols"
+
+
 class WinDbgPluginConfig(BaseSettings):
-    """WinDBG插件配置类，支持从环境变量读取配置"""
+    """
+    WinDBG插件配置类
     
-    cdb_path: Optional[str] = Field(None, env="CDB_PATH", description="CDB.exe的路径")
-    symbol_path: Optional[str] = Field(None, env="SYMBOL_PATH", description="符号文件路径")
-    source_path: Optional[str] = Field(None, env="SOURCE_PATH", description="源代码路径")
-    timeout: int = Field(600, env="DEFAULT_TIMEOUT", description="命令执行超时时间（秒）")
+    ``cdb_path`` 与 ``timeout`` 从 ``CDB_PATH`` / ``DEFAULT_TIMEOUT`` 环境变量读取。
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    ``symbol_path`` 与 ``source_path`` 不绑定环境变量：CDB自身已经识别
+    ``_NT_SYMBOL_PATH`` 与 ``_NT_SOURCE_PATH``，重复读取会与调试器原生行为冲突。
+    未显式配置时，``symbol_path`` 使用Microsoft公共符号服务器以提升开箱可用性；
+    显式传入空字符串则跳过 ``-y``，让CDB回落到 ``_NT_SYMBOL_PATH``。
+    
+    参考：
+    - https://learn.microsoft.com/windows-hardware/drivers/debugger/symbol-path
+    - https://learn.microsoft.com/windows-hardware/drivers/debugger/source-path
+    """
+    
+    # env_prefix隔离默认的按字段名推导，使未声明alias的字段不绑定任何环境变量
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_prefix="MCP_WINDBG_",
+        case_sensitive=False,
+        extra="ignore",
+    )
+    
+    cdb_path: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("CDB_PATH"),
+        description="Path to cdb.exe",
+    )
+    symbol_path: Optional[str] = Field(
+        DEFAULT_SYMBOL_PATH,
+        description="Symbol search path passed to CDB via -y",
+    )
+    source_path: Optional[str] = Field(
+        None,
+        description="Source search path passed to CDB via -srcpath",
+    )
+    timeout: int = Field(
+        600,
+        validation_alias=AliasChoices("DEFAULT_TIMEOUT"),
+        description="Command execution timeout in seconds",
+    )
 
 
 class WinDbgPlugin:
@@ -73,17 +111,12 @@ class WinDbgPlugin:
     def __init__(self, config: Optional[WinDbgPluginConfig] = None):
         self.logger = logger
         self.session_manager = session_manager
-        self.cdb_path = None
-        self.symbol_path = None
-        self.source_path = None
-        self.timeout = 600
         
-        # 如果提供了配置，使用配置中的值，否则使用默认值
-        if config:
-            self.cdb_path = config.cdb_path
-            self.symbol_path = config.symbol_path
-            self.source_path = config.source_path
-            self.timeout = config.timeout
+        config = config or WinDbgPluginConfig()
+        self.cdb_path = config.cdb_path
+        self.symbol_path = config.symbol_path
+        self.source_path = config.source_path
+        self.timeout = config.timeout
     
     def set_cdb_path(self, path: str):
         """设置自定义CDB路径"""
@@ -106,23 +139,30 @@ class WinDbgPlugin:
         self.logger.info(f"设置超时时间: {timeout}秒")
     
     def _get_local_dumps_path(self) -> Optional[str]:
-        """从Windows注册表获取本地转储路径"""
+        """
+        从Windows注册表获取本地转储路径
+        
+        参考：https://learn.microsoft.com/windows/win32/wer/collecting-user-mode-dumps
+        """
         try:
             with winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps"
+                r"SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
             ) as key:
                 dump_folder, _ = winreg.QueryValueEx(key, "DumpFolder")
-                if os.path.exists(dump_folder) and os.path.isdir(dump_folder):
+                dump_folder = os.path.expandvars(dump_folder)
+                if os.path.isdir(dump_folder):
                     return dump_folder
-        except (OSError, WindowsError):
-            # 注册表键可能不存在
+        except OSError:
+            # 注册表键或DumpFolder值可能不存在
             pass
         
         # 默认Windows转储位置
-        default_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "CrashDumps")
-        if os.path.exists(default_path) and os.path.isdir(default_path):
-            return default_path
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            default_path = os.path.join(local_app_data, "CrashDumps")
+            if os.path.isdir(default_path):
+                return default_path
             
         return None
     
@@ -144,16 +184,28 @@ class WinDbgPlugin:
     @kernel_function(description="Analyze a Windows crash dump file using CDB/WinDBG and return comprehensive analysis results")
     def open_windbg_dump(
         self,
-        dump_path: str,
-        include_stack_trace: bool = False,
-        include_modules: bool = False,
-        include_threads: bool = False
+        dump_path: Annotated[
+            str | None,
+            "Path to the crash dump file. Omit to list discoverable dumps instead.",
+        ] = None,
+        include_stack_trace: Annotated[
+            bool, "Include the faulting thread stack trace (kb)"
+        ] = False,
+        include_modules: Annotated[
+            bool, "Include the loaded module list (lm)"
+        ] = False,
+        include_threads: Annotated[
+            bool, "Include the thread list (~)"
+        ] = False,
     ) -> str:
         """
         分析Windows崩溃转储文件
         
+        转储文件通过CDB的 ``-z DumpFile`` 选项加载：
+        https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
+        
         Args:
-            dump_path: 崩溃转储文件路径
+            dump_path: 崩溃转储文件路径，为空时返回可用转储列表
             include_stack_trace: 是否包含堆栈跟踪信息
             include_modules: 是否包含已加载模块信息
             include_threads: 是否包含线程信息
@@ -248,13 +300,25 @@ class WinDbgPlugin:
     @kernel_function(description="Connect to a remote debugging session using CDB/WinDBG")
     def open_windbg_remote(
         self,
-        connection_string: str = Field(..., description="远程连接字符串(如'tcp:Port=5005,Server=192.168.0.100')"),
-        include_stack_trace: bool = False,
-        include_modules: bool = False,
-        include_threads: bool = False
+        connection_string: Annotated[
+            str,
+            "Remote client transport string, e.g. 'tcp:Port=5005,Server=192.168.0.100'",
+        ],
+        include_stack_trace: Annotated[
+            bool, "Include the current thread stack trace (kb)"
+        ] = False,
+        include_modules: Annotated[
+            bool, "Include the loaded module list (lm)"
+        ] = False,
+        include_threads: Annotated[
+            bool, "Include the thread list (~)"
+        ] = False,
     ) -> str:
         """
         连接到远程调试会话
+        
+        通过CDB的 ``-remote ClientTransport`` 选项建立连接：
+        https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
         
         Args:
             connection_string: 远程连接字符串（如'tcp:Port=5005,Server=192.168.0.100'）
@@ -326,13 +390,23 @@ class WinDbgPlugin:
     @kernel_function(description="Execute a specific WinDBG/CDB command on a loaded crash dump or remote session")
     def run_windbg_cmd(
         self,
-        command: str,
-        dump_path: Optional[str] = None,
-        connection_string: Optional[str] = None,
-        timeout: Optional[int] = None
+        command: Annotated[str, "WinDBG/CDB command to execute, e.g. '!analyze -v'"],
+        dump_path: Annotated[
+            str | None, "Crash dump file path (mutually exclusive with connection_string)"
+        ] = None,
+        connection_string: Annotated[
+            str | None, "Remote connection string (mutually exclusive with dump_path)"
+        ] = None,
+        timeout: Annotated[
+            int | None, "Override the command timeout in seconds"
+        ] = None,
     ) -> str:
         """
         在已加载的会话上执行特定的WinDBG命令
+        
+        会话以 ``-noshell`` 启动，因此 ``.shell`` 命令被调试器拒绝，
+        无法借由该函数在宿主机上执行任意程序：
+        https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
         
         Args:
             command: 要执行的WinDBG命令
@@ -396,7 +470,10 @@ class WinDbgPlugin:
             }, ensure_ascii=False)
     
     @kernel_function(description="Close and unload a crash dump session to free up resources")
-    def close_windbg_dump(self, dump_path: str) -> str:
+    def close_windbg_dump(
+        self,
+        dump_path: Annotated[str, "Crash dump file path of the session to close"],
+    ) -> str:
         """
         关闭并卸载崩溃转储会话
         
@@ -432,7 +509,10 @@ class WinDbgPlugin:
             }, ensure_ascii=False)
     
     @kernel_function(description="Close a remote debugging connection and free up resources")
-    def close_windbg_remote(self, connection_string: str) -> str:
+    def close_windbg_remote(
+        self,
+        connection_string: Annotated[str, "Remote connection string of the session to close"],
+    ) -> str:
         """
         关闭远程调试连接
         
@@ -470,8 +550,11 @@ class WinDbgPlugin:
     @kernel_function(description="List Windows crash dump files in a specified directory")
     def list_windbg_dumps(
         self,
-        directory_path: Optional[str] = None,
-        recursive: bool = False
+        directory_path: Annotated[
+            str | None,
+            "Directory to search. Defaults to the WER LocalDumps folder or %LOCALAPPDATA%\\CrashDumps.",
+        ] = None,
+        recursive: Annotated[bool, "Search subdirectories recursively"] = False,
     ) -> str:
         """
         列出指定目录中的Windows崩溃转储文件

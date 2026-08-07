@@ -4,12 +4,14 @@
 """
 
 import argparse
+import atexit
 import logging
 from typing import Any, Literal
 
 from semantic_kernel import Kernel
 from pydantic_settings import BaseSettings
 
+from .cdb_session import session_manager
 from .windbg_plugin import WinDbgPlugin, WinDbgPluginConfig
 from .prompts import get_all_prompts
 
@@ -42,48 +44,60 @@ def create_kernel(config: BaseSettings | None = None) -> Kernel:
 
 
 def parse_arguments():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(description="运行MCP服务器，支持SSE和STDIO传输方式")
+    """
+    解析命令行参数
+    
+    帮助文本使用英文，避免在非UTF-8控制台代码页下出现乱码。
+    符号/源路径选项对应CDB的 ``-y`` / ``-srcpath``：
+    https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
+    """
+    parser = argparse.ArgumentParser(
+        description="Run the WinDBG MCP server over STDIO or SSE transport."
+    )
     parser.add_argument(
         "--transport",
         type=str,
         choices=["sse", "stdio"],
         default="stdio",
-        help="传输方式 (默认: stdio)",
+        help="Transport to serve on (default: stdio)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=3001,
-        help="SSE传输端口 (SSE模式必需)",
+        help="Port for SSE transport (required in SSE mode)",
     )
     parser.add_argument(
         "--log-level",
         type=str,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
-        help="日志级别 (默认: INFO)",
+        help="Logging level (default: INFO)",
     )
     parser.add_argument(
         "--cdb-path",
         type=str,
-        help="自定义CDB.exe路径",
+        help="Path to cdb.exe (auto-detected when omitted)",
     )
     parser.add_argument(
         "--symbol-path",
         type=str,
-        help="自定义符号路径",
+        help=(
+            "Symbol search path passed to CDB via -y. "
+            "Defaults to the Microsoft public symbol server; "
+            "pass an empty string to fall back to _NT_SYMBOL_PATH."
+        ),
     )
     parser.add_argument(
         "--source-path",
         type=str,
-        help="自定义源代码路径",
+        help="Source search path passed to CDB via -srcpath (falls back to _NT_SOURCE_PATH)",
     )
     parser.add_argument(
         "--timeout",
         type=int,
         default=600,
-        help="命令超时时间（秒，默认: 600）",
+        help="Command timeout in seconds (default: 600)",
     )
     return parser.parse_args()
 
@@ -118,13 +132,17 @@ def run(
             logger.error("环境验证失败")
             return
         
-        windbg_config = WinDbgPluginConfig(timeout=timeout)
+        overrides: dict[str, Any] = {"timeout": timeout}
         if cdb_path is not None:
-            windbg_config.cdb_path = cdb_path
+            overrides["cdb_path"] = cdb_path
         if symbol_path is not None:
-            windbg_config.symbol_path = symbol_path
+            overrides["symbol_path"] = symbol_path
         if source_path is not None:
-            windbg_config.source_path = source_path
+            overrides["source_path"] = source_path
+        windbg_config = WinDbgPluginConfig(**overrides)
+        
+        # 进程退出时释放遗留的CDB子进程
+        atexit.register(session_manager.shutdown_all)
         
         # 创建Kernel
         kernel = create_kernel(windbg_config)
@@ -135,9 +153,9 @@ def run(
             version=version,
             server_name="mcp-server-windbg",
             instructions=(
-                "Windows调试工具MCP服务器。提供CDB/WinDBG调试会话管理、"
-                "崩溃转储分析、远程调试连接和调试命令执行功能。"
-                "支持自动分析崩溃转储并提供详细的调试信息。"
+                "Windows debugging MCP server backed by CDB/WinDBG. Provides crash dump "
+                "analysis, remote debugging connections, debugger command execution, and "
+                "session lifecycle management."
             ),
             prompts=get_all_prompts()  # 添加内置提示词
         )
