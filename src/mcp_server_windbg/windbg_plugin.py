@@ -19,9 +19,13 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .cdb_session import (
-    CDBSession, CDBError, SessionManager, SessionInfo, 
+    CDBSession, CDBError, CDBTimeoutError, SessionManager, SessionInfo,
     ConnectionType, SessionState, session_manager
 )
+
+#: 冷符号缓存下 ``!analyze -v`` 可能耗时数十秒，而MCP客户端的默认调用超时通常更短。
+#: 该上限用于在客户端放弃前返回可用的部分结果。
+DEFAULT_ANALYSIS_TIMEOUT = 45
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +70,11 @@ class WinDbgPluginConfig(BaseSettings):
     
     ``cdb_path`` 与 ``timeout`` 从 ``CDB_PATH`` / ``DEFAULT_TIMEOUT`` 环境变量读取。
     
-    ``symbol_path`` 与 ``source_path`` 不绑定环境变量：CDB自身已经识别
-    ``_NT_SYMBOL_PATH`` 与 ``_NT_SOURCE_PATH``，重复读取会与调试器原生行为冲突。
+    ``symbol_path`` 与 ``source_path`` 不占用 ``SYMBOL_PATH`` / ``SOURCE_PATH``：
+    CDB自身已经识别 ``_NT_SYMBOL_PATH`` 与 ``_NT_SOURCE_PATH``，再读一套裸名环境
+    变量会与调试器原生行为产生歧义。二者只接受带 ``MCP_WINDBG_`` 前缀的命名空间
+    变量，因此不会与原生变量混淆。
+    
     未显式配置时，``symbol_path`` 使用Microsoft公共符号服务器以提升开箱可用性；
     显式传入空字符串则跳过 ``-y``，让CDB回落到 ``_NT_SYMBOL_PATH``。
     
@@ -76,18 +83,20 @@ class WinDbgPluginConfig(BaseSettings):
     - https://learn.microsoft.com/windows-hardware/drivers/debugger/source-path
     """
     
-    # env_prefix隔离默认的按字段名推导，使未声明alias的字段不绑定任何环境变量
+    # env_prefix隔离按字段名推导的裸名环境变量；populate_by_name保证声明了
+    # validation_alias的字段仍可用字段名直接构造（命令行参数即走这条路径）
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         env_prefix="MCP_WINDBG_",
+        populate_by_name=True,
         case_sensitive=False,
         extra="ignore",
     )
     
     cdb_path: Optional[str] = Field(
         None,
-        validation_alias=AliasChoices("CDB_PATH"),
+        validation_alias=AliasChoices("cdb_path", "CDB_PATH"),
         description="Path to cdb.exe",
     )
     symbol_path: Optional[str] = Field(
@@ -100,7 +109,7 @@ class WinDbgPluginConfig(BaseSettings):
     )
     timeout: int = Field(
         600,
-        validation_alias=AliasChoices("DEFAULT_TIMEOUT"),
+        validation_alias=AliasChoices("timeout", "DEFAULT_TIMEOUT"),
         description="Command execution timeout in seconds",
     )
 
@@ -197,6 +206,11 @@ class WinDbgPlugin:
         include_threads: Annotated[
             bool, "Include the thread list (~)"
         ] = False,
+        analysis_timeout: Annotated[
+            int | None,
+            "Seconds to wait for '!analyze -v' before returning partial results. "
+            "On a cold symbol cache the first analysis can take well over a minute.",
+        ] = None,
     ) -> str:
         """
         分析Windows崩溃转储文件
@@ -204,11 +218,16 @@ class WinDbgPlugin:
         转储文件通过CDB的 ``-z DumpFile`` 选项加载：
         https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options
         
+        冷符号缓存下首次 ``!analyze -v`` 可能超过一分钟，往往长于MCP客户端的默认
+        调用超时。因此该函数为自动分析设置独立上限：超时后返回已完成的部分结果并
+        标记 ``partial``，会话与已下载的符号保持可用，客户端可再次调用取回完整分析。
+        
         Args:
             dump_path: 崩溃转储文件路径，为空时返回可用转储列表
             include_stack_trace: 是否包含堆栈跟踪信息
             include_modules: 是否包含已加载模块信息
             include_threads: 是否包含线程信息
+            analysis_timeout: ``!analyze -v`` 的等待上限（秒）
         
         Returns:
             str: JSON格式的分析结果
@@ -246,14 +265,33 @@ class WinDbgPlugin:
             session = self._create_session(dump_path=dump_path)
             
             results = {}
+            warnings: list[str] = []
+            partial = False
             
             with session.progress_context("获取崩溃信息"):
                 crash_info = session.send_command(".lastevent")
                 results["crash_info"] = crash_info
             
+            analyze_timeout = analysis_timeout or min(
+                DEFAULT_ANALYSIS_TIMEOUT, self.timeout
+            )
             with session.progress_context("执行自动分析"):
-                analysis = session.send_command("!analyze -v")
-                results["analysis"] = analysis
+                try:
+                    results["analysis"] = session.send_command(
+                        "!analyze -v", timeout=analyze_timeout
+                    )
+                except CDBTimeoutError as e:
+                    if not e.recovered:
+                        raise
+                    partial = True
+                    results["analysis"] = None
+                    warnings.append(
+                        f"'!analyze -v' exceeded {analyze_timeout}s and was skipped. "
+                        "This is expected on a cold symbol cache while symbols download. "
+                        "Symbols are now cached, so retrying this call or invoking "
+                        "run_windbg_cmd with '!analyze -v' should be substantially faster."
+                    )
+                    self.logger.warning(f"自动分析超时，返回部分结果: {dump_path}")
             
             # 可选的详细信息
             if include_stack_trace:
@@ -275,20 +313,25 @@ class WinDbgPlugin:
             
             self.logger.info(f"崩溃转储分析完成: {dump_path}")
             
-            return json.dumps({
+            payload = {
                 "success": True,
+                "partial": partial,
                 "dump_path": dump_path,
                 "session_id": session.session_id,
                 "session_info": _serialize_session_info(session_info),
                 "results": results
-            }, ensure_ascii=False)
+            }
+            if warnings:
+                payload["warnings"] = warnings
+            return json.dumps(payload, ensure_ascii=False)
             
         except CDBError as e:
             self.logger.error(f"CDB错误: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"CDB错误: {str(e)}",
-                "session_id": getattr(e, 'session_id', None)
+                "timed_out": isinstance(e, CDBTimeoutError),
+                "session_id": e.session_id
             }, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"分析崩溃转储失败: {e}")
@@ -378,7 +421,8 @@ class WinDbgPlugin:
             return json.dumps({
                 "success": False,
                 "error": f"CDB错误: {str(e)}",
-                "session_id": getattr(e, 'session_id', None)
+                "timed_out": isinstance(e, CDBTimeoutError),
+                "session_id": e.session_id
             }, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"连接远程调试会话失败: {e}")
@@ -453,13 +497,24 @@ class WinDbgPlugin:
                 "output": output
             }, ensure_ascii=False)
             
+        except CDBTimeoutError as e:
+            self.logger.warning(f"命令超时: {e}")
+            return json.dumps({
+                "success": False,
+                "error": str(e),
+                "timed_out": True,
+                "session_recovered": e.recovered,
+                "command": command,
+                "session_id": e.session_id
+            }, ensure_ascii=False)
         except CDBError as e:
             self.logger.error(f"CDB错误: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"CDB错误: {str(e)}",
+                "timed_out": False,
                 "command": command,
-                "session_id": getattr(e, 'session_id', None)
+                "session_id": e.session_id
             }, ensure_ascii=False)
         except Exception as e:
             self.logger.error(f"执行命令失败: {e}")
@@ -647,8 +702,9 @@ class WinDbgPlugin:
             str: JSON格式的会话列表
         """
         try:
-            # 清理死会话
+            # 清理死会话与空闲超时会话
             self.session_manager.cleanup_dead_sessions()
+            self.session_manager.cleanup_idle_sessions()
             
             # 获取所有会话信息
             sessions_info = self.session_manager.list_sessions()

@@ -26,9 +26,15 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-# 命令标记用于可靠地检测命令完成
-COMMAND_MARKER = ".echo COMMAND_COMPLETED_MARKER"
-COMMAND_MARKER_PATTERN = re.compile(r"COMMAND_COMPLETED_MARKER")
+# 命令标记用于可靠地检测命令完成。序号使超时命令的迟到标记可以被识别并丢弃，
+# 避免其满足下一条命令的等待、造成输出串台。
+COMMAND_MARKER_PREFIX = "COMMAND_COMPLETED_MARKER"
+COMMAND_MARKER_PATTERN = re.compile(rf"{COMMAND_MARKER_PREFIX}_(\d+)")
+
+
+def _marker_command(sequence: int) -> str:
+    """构造带序号的完成标记命令"""
+    return f".echo {COMMAND_MARKER_PREFIX}_{sequence}"
 
 # 默认的CDB.exe可能位置
 DEFAULT_CDB_PATHS = [
@@ -61,7 +67,7 @@ def _get_system_encoding() -> str:
             codecs.lookup(encoding)
             logger.info(f"检测到Windows控制台编码: {encoding}")
             return encoding
-    except (AttributeError, LookupError, OSError, ValueError):
+    except (AttributeError, ImportError, LookupError, OSError, ValueError):
         pass
     
     try:
@@ -113,6 +119,28 @@ class CDBError(Exception):
     def __init__(self, message: str, session_id: Optional[str] = None):
         super().__init__(message)
         self.session_id = session_id
+
+
+class CDBTimeoutError(CDBError):
+    """命令超时异常
+    
+    与一般 :class:`CDBError` 区分：超时后调试器往往仍然健康，
+    ``recovered`` 表示会话是否已重新同步并可继续接受命令。
+    """
+    
+    def __init__(
+        self,
+        message: str,
+        session_id: Optional[str] = None,
+        *,
+        command: Optional[str] = None,
+        timeout: Optional[int] = None,
+        recovered: bool = False,
+    ):
+        super().__init__(message, session_id)
+        self.command = command
+        self.timeout = timeout
+        self.recovered = recovered
 
 
 class CDBSession:
@@ -185,6 +213,10 @@ class CDBSession:
         self.ready_event = threading.Event()
         self.process: Optional[subprocess.Popen] = None
         self.reader_thread: Optional[threading.Thread] = None
+        
+        # 命令标记序号：reader线程只在标记序号与期望值一致时发布输出
+        self._marker_sequence = 0
+        self._expected_marker = 0
         
         logger.info(f"初始化CDB会话: {self.session_id}")
         logger.info(f"连接类型: {self.connection_type.value}")
@@ -308,16 +340,25 @@ class CDBSession:
                     line = line.rstrip()
                     logger.debug(f"CDB输出: {line}")
                     
-                    with self.lock:
+                    match = COMMAND_MARKER_PATTERN.search(line)
+                    if not match:
                         buffer.append(line)
-                        # 检查是否包含命令完成标记
-                        if COMMAND_MARKER_PATTERN.search(line):
-                            # 移除标记行本身
-                            if buffer and COMMAND_MARKER_PATTERN.search(buffer[-1]):
-                                buffer.pop()
-                            self.output_lines = buffer
-                            buffer = []
+                        continue
+                    
+                    sequence = int(match.group(1))
+                    # 标记行自身不属于命令输出
+                    batch, buffer = buffer, []
+                    
+                    with self.lock:
+                        if sequence == self._expected_marker:
+                            self.output_lines = batch
                             self.ready_event.set()
+                        else:
+                            # 已超时命令的迟到输出，丢弃以免污染后续命令
+                            logger.warning(
+                                f"丢弃过期标记{sequence}的{len(batch)}行输出"
+                                f"（当前期望{self._expected_marker}）"
+                            )
                 except (UnicodeDecodeError, UnicodeError) as e:
                     # 如果遇到编码错误，记录警告但继续处理
                     logger.warning(f"CDB输出编码错误，跳过该行: {e}")
@@ -328,13 +369,28 @@ class CDBSession:
         except Exception as e:
             logger.error(f"CDB输出读取意外错误: {e}")
     
+    def _write_marker(self, prefix: str = "") -> int:
+        """
+        写入带序号的完成标记，返回该序号
+        
+        调用方必须持有 ``ready_event`` 的清除责任。
+        """
+        with self.lock:
+            self._marker_sequence += 1
+            sequence = self._marker_sequence
+            self._expected_marker = sequence
+            self.output_lines = []
+        
+        self.process.stdin.write(f"{prefix}{_marker_command(sequence)}\n")
+        self.process.stdin.flush()
+        return sequence
+    
     def _wait_for_initialization(self):
         """等待CDB初始化完成"""
         logger.info("等待CDB初始化...")
         try:
             self.ready_event.clear()
-            self.process.stdin.write(f"{COMMAND_MARKER}\n")
-            self.process.stdin.flush()
+            self._write_marker()
             
             if not self.ready_event.wait(timeout=self.timeout):
                 raise CDBError("CDB初始化超时", self.session_id)
@@ -342,6 +398,40 @@ class CDBSession:
             logger.info("CDB初始化完成")
         except IOError as e:
             raise CDBError(f"CDB通信失败: {str(e)}", self.session_id)
+    
+    def _resynchronize(self, grace: int = 15) -> bool:
+        """
+        命令超时后尝试与CDB重新同步
+        
+        超时通常意味着命令本身耗时过长（例如冷符号缓存下的 ``!analyze -v``），
+        而调试器进程仍然健康。重新同步成功即可保留已加载的转储与已下载的符号，
+        避免销毁会话后重新支付这部分开销。
+        
+        Args:
+            grace: 等待调试器响应新标记的宽限时间（秒）
+        
+        Returns:
+            bool: 会话是否已恢复到可用状态
+        """
+        if not self.process or self.process.poll() is not None:
+            return False
+        
+        logger.info("尝试与CDB重新同步...")
+        try:
+            self.ready_event.clear()
+            # 前置换行确保标记不会被拼接到未完成的输入行尾
+            self._write_marker(prefix="\n")
+        except (IOError, ValueError):
+            return False
+        
+        if self.ready_event.wait(timeout=grace):
+            with self.lock:
+                self.output_lines = []
+            logger.info("CDB重新同步成功，会话保留")
+            return True
+        
+        logger.warning("CDB重新同步失败")
+        return False
     
     def send_command(self, command: str, timeout: Optional[int] = None) -> List[str]:
         """
@@ -355,7 +445,8 @@ class CDBSession:
             CDB输出行列表
             
         Raises:
-            CDBError: 如果命令超时或CDB无响应
+            CDBTimeoutError: 命令超时。``recovered`` 指示会话是否仍可用
+            CDBError: CDB无响应或通信失败
         """
         if not self.process:
             raise CDBError("CDB进程未运行", self.session_id)
@@ -368,13 +459,10 @@ class CDBSession:
         self.last_activity = time.time()
         
         self.ready_event.clear()
-        with self.lock:
-            self.output_lines = []
-            
+        
         try:
             # 发送命令和完成标记
-            self.process.stdin.write(f"{command}\n{COMMAND_MARKER}\n")
-            self.process.stdin.flush()
+            self._write_marker(prefix=f"{command}\n")
         except IOError as e:
             self.state = SessionState.ERROR
             raise CDBError(f"发送命令失败: {str(e)}", self.session_id)
@@ -383,8 +471,16 @@ class CDBSession:
         logger.debug(f"等待命令完成，超时: {cmd_timeout}秒")
         
         if not self.ready_event.wait(timeout=cmd_timeout):
-            self.state = SessionState.ERROR
-            raise CDBError(f"命令超时 ({cmd_timeout}秒): {command}", self.session_id)
+            recovered = self._resynchronize()
+            self.state = SessionState.READY if recovered else SessionState.ERROR
+            self.last_activity = time.time()
+            raise CDBTimeoutError(
+                f"命令超时 ({cmd_timeout}秒): {command}",
+                self.session_id,
+                command=command,
+                timeout=cmd_timeout,
+                recovered=recovered,
+            )
             
         with self.lock:
             result = self.output_lines.copy()
@@ -469,12 +565,34 @@ class CDBSession:
         self.shutdown()
 
 
+#: 空闲会话回收的默认阈值（秒）；每个存活会话都持有一个CDB进程及其内存映射
+DEFAULT_IDLE_TIMEOUT = 1800
+
+#: 回收线程的检查间隔（秒）
+IDLE_REAPER_INTERVAL = 60
+
+
 class SessionManager:
     """CDB会话管理器"""
     
-    def __init__(self):
+    def __init__(
+        self,
+        idle_timeout: int = DEFAULT_IDLE_TIMEOUT,
+        reaper_interval: int = IDLE_REAPER_INTERVAL,
+    ):
+        """
+        初始化会话管理器
+        
+        Args:
+            idle_timeout: 会话空闲多久后回收，``0`` 或负值禁用自动回收
+            reaper_interval: 回收线程的检查间隔
+        """
         self.sessions: Dict[str, CDBSession] = {}
         self.lock = threading.Lock()
+        self.idle_timeout = idle_timeout
+        self.reaper_interval = reaper_interval
+        self._reaper_thread: Optional[threading.Thread] = None
+        self._reaper_stop = threading.Event()
         
     def create_session(
         self,
@@ -510,7 +628,9 @@ class SessionManager:
             )
             self.sessions[session_id] = session
             logger.info(f"创建新会话: {session_id}")
-            return session
+        
+        self.start_idle_reaper()
+        return session
     
     def get_session(self, session_id: str) -> Optional[CDBSession]:
         """获取指定会话"""
@@ -546,8 +666,69 @@ class SessionManager:
                 self.sessions[session_id].shutdown()
                 del self.sessions[session_id]
     
+    def cleanup_idle_sessions(self, idle_timeout: Optional[int] = None) -> List[str]:
+        """
+        回收空闲超时的会话
+        
+        每个会话持有一个CDB进程及其转储映射，长时间空闲会白占内存。
+        
+        Args:
+            idle_timeout: 覆盖实例的空闲阈值
+        
+        Returns:
+            List[str]: 被回收的会话ID
+        """
+        threshold = self.idle_timeout if idle_timeout is None else idle_timeout
+        if threshold <= 0:
+            return []
+        
+        now = time.time()
+        with self.lock:
+            idle_sessions = [
+                session_id for session_id, session in self.sessions.items()
+                if now - session.last_activity > threshold
+            ]
+            
+            for session_id in idle_sessions:
+                logger.info(f"回收空闲会话: {session_id}")
+                self.sessions[session_id].shutdown()
+                del self.sessions[session_id]
+        
+        return idle_sessions
+    
+    def start_idle_reaper(self):
+        """启动空闲回收线程（幂等）"""
+        if self.idle_timeout <= 0:
+            return
+        
+        with self.lock:
+            if self._reaper_thread and self._reaper_thread.is_alive():
+                return
+            self._reaper_stop.clear()
+            self._reaper_thread = threading.Thread(
+                target=self._reaper_loop,
+                name="cdb-idle-reaper",
+                daemon=True,
+            )
+            self._reaper_thread.start()
+        logger.info(f"空闲会话回收线程已启动（阈值{self.idle_timeout}秒）")
+    
+    def stop_idle_reaper(self):
+        """停止空闲回收线程"""
+        self._reaper_stop.set()
+    
+    def _reaper_loop(self):
+        """回收线程主循环"""
+        while not self._reaper_stop.wait(self.reaper_interval):
+            try:
+                self.cleanup_dead_sessions()
+                self.cleanup_idle_sessions()
+            except Exception as e:
+                logger.error(f"空闲会话回收出错: {e}")
+    
     def shutdown_all(self):
         """关闭所有会话"""
+        self.stop_idle_reaper()
         with self.lock:
             for session in self.sessions.values():
                 session.shutdown()

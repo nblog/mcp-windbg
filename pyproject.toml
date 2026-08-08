@@ -16,6 +16,20 @@ dependencies = [
 [project.scripts]
 mcp-server-windbg = "mcp_server_windbg:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
 [build-system]
 requires = ["uv_build>=0.8.15,<0.9.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "error::DeprecationWarning:mcp_server_windbg.*",
+]
+markers = [
+    "requires_cdb: test needs a real cdb.exe and a crash dump present on the machine",
+]

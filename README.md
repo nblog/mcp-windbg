@@ -65,6 +65,9 @@
 }
 ```
 
+> `open_windbg_dump` 支持 `analysis_timeout`（秒）。冷符号缓存下首次 `!analyze -v`
+> 可能耗时较长，超时后返回带 `"partial": true` 的部分结果与提示，会话与已下载的符号保持可用。
+
 #### 3. `run_windbg_cmd`
 执行特定的WinDBG命令
 ```json
@@ -112,17 +115,50 @@
 - `--port`: SSE模式端口（默认：3001）
 - `--log-level`: 日志级别（DEBUG, INFO, WARNING, ERROR）
 - `--cdb-path`: 自定义CDB.exe路径
-- `--symbol-path`: 自定义符号路径
+- `--symbol-path`: 符号路径，对应CDB的 `-y`
+- `--source-path`: 源代码路径，对应CDB的 `-srcpath`
 - `--timeout`: 命令超时时间（秒，默认：600）
+- `--idle-timeout`: 空闲会话回收阈值（秒，默认：1800，`0` 禁用）
+
+### 符号路径
+
+`--symbol-path` 缺省为 Microsoft 公共符号服务器，开箱即可解析系统模块符号：
+
+```text
+SRV*https://msdl.microsoft.com/download/symbols
+```
+
+传入空字符串则跳过 `-y`，让 CDB 回落到自身的 `_NT_SYMBOL_PATH`：
+
+```bash
+mcp-server-windbg --symbol-path ""
+```
 
 ### 环境变量
+
+符号与源路径**不读取**裸名 `SYMBOL_PATH` / `SOURCE_PATH`。CDB 自身已经识别
+[`_NT_SYMBOL_PATH`](https://learn.microsoft.com/windows-hardware/drivers/debugger/symbol-path)
+与 `_NT_SOURCE_PATH`，再占用一套裸名变量会与调试器原生行为产生歧义。
+若需通过环境变量覆盖，请使用带 `MCP_WINDBG_` 前缀的命名空间变量。
+
 可以创建`.env`文件来设置默认配置：
+
 ```env
-CDB_PATH=C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe
-SYMBOL_PATH=srv*C:\\ProgramData\\Dbg\\sym*https://msdl.microsoft.com/download/symbols
-SOURCE_PATH=C:\Users\qt\work\qt;
-DEFAULT_TIMEOUT=60
+CDB_PATH=C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe
+DEFAULT_TIMEOUT=600
+MCP_WINDBG_SYMBOL_PATH=srv*C:\ProgramData\Dbg\sym*https://msdl.microsoft.com/download/symbols
+MCP_WINDBG_SOURCE_PATH=C:\Users\qt\work\qt
 ```
+
+命令行参数优先级高于环境变量。
+
+### 安全性
+
+调试会话以 [`-noshell`](https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options)
+启动，`.shell` 被调试器拒绝，因此 `run_windbg_cmd` 无法借由调试命令在宿主机上执行程序。
+
+需要注意 `run_windbg_cmd` 仍可打开服务进程有权读取的任意转储文件路径，
+请仅在受信任的调用方之间暴露该服务。
 
 ## 🏗️ 架构设计
 
@@ -151,7 +187,16 @@ src/mcp_server_windbg/
 ### 会话管理策略
 - 基于文件路径或连接字符串的会话标识
 - 会话复用避免重复创建
-- 定期清理死会话
+- 后台线程回收死会话与空闲超时会话（每个会话持有一个CDB进程及其转储映射）
+- 命令超时后尝试重新同步：调试器健康时保留会话，避免重新加载转储和重新下载符号
+
+## 🧪 测试
+
+```bash
+uv pip install -e . pytest
+pytest                        # 全部测试
+pytest -m "not requires_cdb"  # 跳过需要真实调试器与转储文件的测试
+```
 
 ## 🔍 故障排除
 
@@ -162,6 +207,12 @@ A: 确保已安装 [Windows Driver Kit](https://learn.microsoft.com/windows-hard
 
 **Q: 命令执行超时**
 A: 增加超时时间使用`--timeout`参数，或检查CDB是否响应
+
+**Q: 首次分析很慢，MCP客户端提前超时**
+A: 冷符号缓存下首次 `!analyze -v` 需要下载符号，可能耗时超过一分钟，
+而多数MCP客户端的默认调用超时更短。此时 `open_windbg_dump` 会返回带
+`"partial": true` 的部分结果；符号下载完成后重新调用即可显著加快。
+也可以调大客户端的调用超时，或用 `analysis_timeout` 调整服务端上限
 
 **Q: 远程连接失败**
 A: 检查网络连接和防火墙设置，确认目标机器已启动调试服务器

@@ -11,7 +11,7 @@ from typing import Any, Literal
 from semantic_kernel import Kernel
 from pydantic_settings import BaseSettings
 
-from .cdb_session import session_manager
+from .cdb_session import DEFAULT_IDLE_TIMEOUT, session_manager
 from .windbg_plugin import WinDbgPlugin, WinDbgPluginConfig
 from .prompts import get_all_prompts
 
@@ -99,6 +99,15 @@ def parse_arguments():
         default=600,
         help="Command timeout in seconds (default: 600)",
     )
+    parser.add_argument(
+        "--idle-timeout",
+        type=int,
+        default=DEFAULT_IDLE_TIMEOUT,
+        help=(
+            "Reclaim debugging sessions idle for this many seconds "
+            f"(default: {DEFAULT_IDLE_TIMEOUT}, 0 disables reclamation)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -108,7 +117,8 @@ def run(
     cdb_path: str | None = None,
     symbol_path: str | None = None,
     source_path: str | None = None,
-    timeout: int = 600
+    timeout: int = 600,
+    idle_timeout: int = DEFAULT_IDLE_TIMEOUT
 ) -> None:
     """
     异步运行 MCP WinDBG 服务器
@@ -120,6 +130,7 @@ def run(
         symbol_path: 自定义符号路径
         source_path: 自定义源代码路径
         timeout: 命令超时时间
+        idle_timeout: 空闲会话回收阈值，0表示禁用
     """
     try:
         from dotenv import load_dotenv
@@ -140,6 +151,8 @@ def run(
         if source_path is not None:
             overrides["source_path"] = source_path
         windbg_config = WinDbgPluginConfig(**overrides)
+        
+        session_manager.idle_timeout = idle_timeout
         
         # 进程退出时释放遗留的CDB子进程
         atexit.register(session_manager.shutdown_all)
@@ -229,7 +242,8 @@ def main():
         cdb_path=args.cdb_path,
         symbol_path=args.symbol_path,
         source_path=args.source_path,
-        timeout=args.timeout
+        timeout=args.timeout,
+        idle_timeout=args.idle_timeout
     )
 
 

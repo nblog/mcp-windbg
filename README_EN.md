@@ -65,6 +65,10 @@ Connect to remote debugging sessions
 }
 ```
 
+> `open_windbg_dump` accepts `analysis_timeout` in seconds. On a cold symbol cache the
+> first `!analyze -v` can be slow; when it exceeds the limit the call returns partial
+> results with `"partial": true` and a hint, keeping the session and downloaded symbols usable.
+
 #### 3. `run_windbg_cmd`
 Execute specific WinDBG commands
 ```json
@@ -112,17 +116,55 @@ Close remote debugging connections
 - `--port`: SSE mode port (default: 3001)
 - `--log-level`: Log level (DEBUG, INFO, WARNING, ERROR)
 - `--cdb-path`: Custom CDB.exe path
-- `--symbol-path`: Custom symbols path
+- `--symbol-path`: Symbol search path, passed to CDB as `-y`
+- `--source-path`: Source search path, passed to CDB as `-srcpath`
 - `--timeout`: Command timeout in seconds (default: 600)
+- `--idle-timeout`: Reclaim sessions idle this long, in seconds (default: 1800, `0` disables)
+
+### Symbol Path
+
+`--symbol-path` defaults to the Microsoft public symbol server, so system module
+symbols resolve out of the box:
+
+```text
+SRV*https://msdl.microsoft.com/download/symbols
+```
+
+Pass an empty string to skip `-y` and let CDB fall back to its own `_NT_SYMBOL_PATH`:
+
+```bash
+mcp-server-windbg --symbol-path ""
+```
 
 ### Environment Variables
+
+Symbol and source paths **do not** read the bare `SYMBOL_PATH` / `SOURCE_PATH`
+variables. CDB already honors
+[`_NT_SYMBOL_PATH`](https://learn.microsoft.com/windows-hardware/drivers/debugger/symbol-path)
+and `_NT_SOURCE_PATH`, so claiming a second set of bare names would be ambiguous
+against the debugger's native behavior. Use the `MCP_WINDBG_` prefixed variables
+to override them through the environment.
+
 You can create a `.env` file to set default configurations:
+
 ```env
-CDB_PATH=C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe
-SYMBOL_PATH=srv*C:\\ProgramData\\Dbg\\sym*https://msdl.microsoft.com/download/symbols
-SOURCE_PATH=C:\Users\qt\work\qt;
-DEFAULT_TIMEOUT=60
+CDB_PATH=C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe
+DEFAULT_TIMEOUT=600
+MCP_WINDBG_SYMBOL_PATH=srv*C:\ProgramData\Dbg\sym*https://msdl.microsoft.com/download/symbols
+MCP_WINDBG_SOURCE_PATH=C:\Users\qt\work\qt
 ```
+
+Command line arguments take precedence over environment variables.
+
+### Security
+
+Debugging sessions launch with
+[`-noshell`](https://learn.microsoft.com/windows-hardware/drivers/debugger/cdb-command-line-options),
+so the debugger rejects `.shell` and `run_windbg_cmd` cannot execute host programs
+through debugger commands.
+
+Note that `run_windbg_cmd` can still open any dump path the server process is able
+to read, so only expose this server to trusted callers.
 
 ## 🏗️ Architecture Design
 
@@ -151,7 +193,18 @@ src/mcp_server_windbg/
 ### Session Management Strategy
 - Session identification based on file path or connection string
 - Session reuse to avoid duplicate creation
-- Regular cleanup of dead sessions
+- Background thread reclaims dead and idle sessions, since each session holds a CDB
+  process and its dump mapping
+- After a command timeout the session resynchronizes when the debugger is still
+  healthy, preserving the loaded dump and already-downloaded symbols
+
+## 🧪 Testing
+
+```bash
+uv pip install -e . pytest
+pytest                        # full suite
+pytest -m "not requires_cdb"  # skip tests needing a real debugger and dump file
+```
 
 ## 🔍 Troubleshooting
 
@@ -162,6 +215,13 @@ A: Ensure [Windows Driver Kit](https://learn.microsoft.com/windows-hardware/driv
 
 **Q: Command execution timeout**
 A: Increase timeout using the `--timeout` parameter, or check if CDB is responding
+
+**Q: The first analysis is slow and my MCP client times out**
+A: On a cold symbol cache the first `!analyze -v` downloads symbols and can take over
+a minute, which is longer than most MCP clients' default call timeout. In that case
+`open_windbg_dump` returns partial results with `"partial": true`; retrying after the
+symbols are cached is substantially faster. You can also raise the client's call
+timeout or tune the server-side limit with `analysis_timeout`
 
 **Q: Remote connection failed**
 A: Check network connection and firewall settings, confirm the target machine has started the debugging server
